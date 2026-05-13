@@ -1,0 +1,35 @@
+name: Dishii AI Agent - Daily Automation
+
+on:
+  schedule:
+    # Runs every day at 6:00 PM EAT (15:00 UTC)
+    - cron: '0 15 * * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install supabase pandas python-dotenv google-generativeai
+    
+    - name: Run Dishii AI Agent
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+      run: |
+        python agent_automation.py
