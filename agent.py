@@ -1,13 +1,7 @@
 """
-agent.py — Dishii Autonomous Agent
-Runs every 30 minutes via GitHub Actions.
-For each store:
-  1. Fetch latest inventory from DB
-  2. Reclassify all items (traffic lights recalculated)
-  3. Send WhatsApp alerts for CRITICAL/HIGH items
-  4. Create procurement requests for stockout items
-  5. Send hourly briefing (on the hour only)
-  6. Log the run
+agent.py v10 — Dishii Autonomous Agent
+Fixes: reorder logic (expired never reorder), batch procurement,
+       deduplication, new enterprise briefing format
 """
 import os
 import sys
@@ -30,227 +24,211 @@ from ai import generate_briefing, classify_item
 
 
 def should_send_briefing() -> bool:
-    """Send briefing once per hour: only when minutes < 35 (cron runs at :00 and :30)."""
+    """Send briefing at top of hour (cron runs :00 and :30)."""
     return datetime.now().minute < 35
 
 
 def process_store(store: dict) -> dict:
-    """
-    Run full analysis for one store.
-    Returns stats dict.
-    """
     store_id   = store["id"]
     store_name = store["name"]
-    stats      = {"alerts": 0, "procurement": 0, "errors": 0}
+    stats      = {"alerts":0, "procurement":0, "errors":0}
 
-    logger.info(f"Processing store: {store_name} ({store_id})")
+    logger.info(f"Processing: {store_name}")
 
-    # Get managers — if none, skip
     phones = db.get_manager_phones(store_id)
     if not phones:
-        logger.warning(f"{store_name}: no active managers, skipping")
+        logger.warning(f"{store_name}: no active managers — skipping")
         return stats
 
-    # Get latest inventory
     items = db.get_latest_inventory(store_id)
     if not items:
-        logger.info(f"{store_name}: no inventory loaded yet")
+        logger.info(f"{store_name}: no inventory loaded")
         return stats
 
-    logger.info(f"{store_name}: {len(items)} items found")
+    logger.info(f"{store_name}: {len(items)} items")
 
-    # Reclassify items (days_to_expiry changes every day)
-    critical_items = []
-    order_items    = []
+    # ── Reclassify all items with fresh expiry dates ──────────
+    expired_items  = []   # is_expired = True → REMOVE
+    reorder_items  = []   # should_reorder = True → ORDER
+    watch_items    = []   # HIGH severity → monitor
+    critical_items = []   # CRITICAL or HIGH → include in briefing
 
     for item in items:
-        # Recalculate days_to_expiry from today
-        from ai import days_until
         import pandas as pd
-        dte = days_until(pd.to_datetime(item.get("expiry_date"), errors="coerce"))
+        from ai import days_until
+        dte  = days_until(pd.to_datetime(item.get("expiry_date"), errors="coerce"))
         item["days_to_expiry"] = dte
 
-        classification = classify_item(item)
+        cls = classify_item(item)
 
-        # Update in DB
+        # Update classification in DB
         try:
             db.get_db().table("inventory_items").update({
-                "days_to_expiry":  dte,
-                "stock_days":      classification["stock_days"],
-                "waste_units":     classification["waste_units"],
-                "waste_value":     classification["waste_value"],
-                "inventory_value": classification["inventory_value"],
-                "traffic_light":   classification["traffic_light"],
-                "severity_level":  classification["severity_level"],
-                "risk_type":       classification["risk_type"],
-                "risk_score":      classification["risk_score"],
-                "risk_reason":     classification["risk_reason"],
-                "risk_color":      classification["risk_color"],
-                "order_required":  classification["order_required"],
-                "stock_action":    classification["stock_action"],
-                "is_expired":      classification["is_expired"],
-                "show_in_priority":classification["show_in_priority"],
-                "updated_at":      datetime.now().isoformat()
+                "days_to_expiry":   dte,
+                "stock_days":       cls["stock_days"],
+                "waste_units":      cls["waste_units"],
+                "waste_value":      cls["waste_value"],
+                "inventory_value":  cls["inventory_value"],
+                "traffic_light":    cls["traffic_light"],
+                "severity_level":   cls["severity_level"],
+                "risk_type":        cls["risk_type"],
+                "risk_score":       cls["risk_score"],
+                "risk_reason":      cls["risk_reason"],
+                "risk_color":       cls["risk_color"],
+                "order_required":   cls["order_required"],
+                "stock_action":     cls["stock_action"],
+                "is_expired":       cls["is_expired"],
+                "show_in_priority": cls["show_in_priority"],
+                "updated_at":       datetime.now().isoformat()
             }).eq("id", item["id"]).execute()
         except Exception as e:
-            logger.error(f"DB update failed for {item.get('product_name')}: {e}")
             stats["errors"] += 1
+            logger.error(f"DB update {item.get('product_name','?')}: {e}")
 
-        if classification["severity_level"] in ("CRITICAL", "HIGH"):
-            item.update(classification)
+        item.update(cls)
+
+        # Categorize correctly
+        if cls["is_expired"]:
+            expired_items.append(item)  # Remove from shelf
+
+        elif wa.should_reorder(item):   # FIX: only genuine stockouts
+            reorder_items.append(item)  # Order more
+
+        elif cls["severity_level"] == "HIGH":
+            watch_items.append(item)    # Monitor
+
+        if cls["severity_level"] in ("CRITICAL","HIGH"):
             critical_items.append(item)
 
-        if classification["order_required"]:
-            item.update(classification)
-            order_items.append(item)
+    logger.info(
+        f"{store_name}: {len(expired_items)} expired, "
+        f"{len(reorder_items)} need reorder, "
+        f"{len(watch_items)} watch"
+    )
 
-    logger.info(f"{store_name}: {len(critical_items)} critical, {len(order_items)} need orders")
-
-    # Send stock alerts (max 5 per run to avoid spam)
-    for item in critical_items[:5]:
-        msg = wa.msg_stock_alert(
-            store_name   = store_name,
-            product      = item["product_name"],
-            risk         = item["severity_level"],
-            stock        = int(item.get("current_stock", 0)),
-            stock_days   = int(item.get("stock_days", 0)),
-            reason       = item.get("risk_reason", "")
-        )
-        sent = wa.send_to_all(phones, msg)
-        if sent > 0:
-            stats["alerts"] += sent
-            db.log_whatsapp(
-                store_id   = store_id,
-                direction  = "outbound",
-                phone      = ",".join(phones),
-                message    = msg,
-                msg_type   = "alert"
-            )
-
-    # Create procurement requests for order items (max 5 per run)
-    existing_pending = {
-        r["product_name"] for r in db.get_pending_procurement(store_id)
+    # ── Build summary ─────────────────────────────────────────
+    summary = {
+        "total":       len(items),
+        "critical":    sum(1 for i in items if i.get("severity_level")=="CRITICAL"),
+        "high":        sum(1 for i in items if i.get("severity_level")=="HIGH"),
+        "medium":      sum(1 for i in items if i.get("severity_level")=="MEDIUM"),
+        "low":         sum(1 for i in items if i.get("severity_level")=="LOW"),
+        "total_value": sum(float(i.get("inventory_value",0) or 0) for i in items),
+        "waste_value": sum(float(i.get("waste_value",0) or 0) for i in items),
     }
-    for item in order_items[:5]:
+    tv = summary["total_value"]
+    summary["health_score"] = max(0,min(100,int(100-(summary["waste_value"]/tv*100)))) if tv>0 else 100
+
+    # ── Create procurement requests (FIXED: never for expired) ─
+    existing_pending = {r["product_name"] for r in db.get_pending_procurement(store_id)}
+    new_proc_items   = []
+
+    for item in reorder_items[:10]:
+        # Double-check: skip expired, waste, overstocked
+        if item.get("is_expired"):
+            logger.info(f"Skip expired from procurement: {item['product_name']}")
+            continue
+        if item.get("risk_type") in ("WASTE","OVERSTOCK"):
+            continue
         if item["product_name"] in existing_pending:
-            continue  # already has a pending request
+            continue
 
-        daily_rate    = float(item.get("daily_sales_rate", 1) or 1)
-        suggested_qty = max(1, int(daily_rate * 14))  # 2-week supply
-
-        req_id = db.create_procurement_request(store_id, item, suggested_qty)
+        rate  = float(item.get("daily_sales_rate", 1) or 1)
+        qty   = max(1, int(rate * 14))  # 2-week supply
+        req_id = db.create_procurement_request(store_id, item, qty)
         if req_id:
             stats["procurement"] += 1
-            msg = wa.msg_procurement_request(
-                store_name = store_name,
-                product    = item["product_name"],
-                qty        = suggested_qty,
-                supplier   = item.get("supplier", "Unknown"),
-                value      = suggested_qty * float(item.get("selling_price", 0)),
-                request_id = req_id,
-                urgency    = item["severity_level"]
-            )
-            sent = wa.send_to_all(phones, msg)
-            if sent > 0:
-                db.log_whatsapp(
-                    store_id        = store_id,
-                    direction       = "outbound",
-                    phone           = ",".join(phones),
-                    message         = msg,
-                    msg_type        = "procurement",
-                    procurement_id  = req_id
-                )
+            item["_req_id"] = req_id
+            new_proc_items.append(item)
 
-    # Hourly briefing (only at top of hour)
-    if should_send_briefing():
-        logger.info(f"{store_name}: sending hourly briefing")
-        summary = {
-            "total":       len(items),
-            "critical":    len([i for i in items if i.get("severity_level") == "CRITICAL"]),
-            "high":        len([i for i in items if i.get("severity_level") == "HIGH"]),
-            "medium":      len([i for i in items if i.get("severity_level") == "MEDIUM"]),
-            "low":         len([i for i in items if i.get("severity_level") == "LOW"]),
-            "total_value": sum(float(i.get("inventory_value", 0)) for i in items),
-            "waste_value": sum(float(i.get("waste_value", 0)) for i in items),
-            "health_score":100
-        }
-        # Recalculate health
-        if summary["total_value"] > 0:
-            summary["health_score"] = max(0, min(100, int(
-                100 - (summary["waste_value"] / summary["total_value"]) * 100
-            )))
-
-        briefing = generate_briefing(store_name, summary, critical_items)
-        briefing_msg = wa.msg_hourly_briefing(store_name, briefing, summary)
-        sent = wa.send_to_all(phones, briefing_msg)
-        if sent > 0:
+    # ── Send BATCHED procurement approval ─────────────────────
+    if new_proc_items:
+        batch_msg = wa.msg_batch_procurement(store_name, new_proc_items)
+        sent = wa.send_to_all(phones, batch_msg, "procurement")
+        if sent:
             stats["alerts"] += sent
-            db.log_whatsapp(
-                store_id  = store_id,
-                direction = "outbound",
-                phone     = ",".join(phones),
-                message   = briefing_msg,
-                msg_type  = "briefing"
-            )
+            db.log_whatsapp(store_id,"outbound",",".join(phones),
+                            batch_msg,"procurement")
+            logger.info(f"{store_name}: sent batch of {len(new_proc_items)} procurement items")
 
-    logger.info(f"{store_name}: done — alerts={stats['alerts']}, procurement={stats['procurement']}")
+    # ── Hourly briefing (top of hour only) ────────────────────
+    if should_send_briefing():
+        logger.info(f"{store_name}: generating operational briefing")
+
+        ai_text = generate_briefing(store_name, summary, critical_items)
+
+        briefing_msg = wa.msg_operational_briefing(
+            store_name        = store_name,
+            summary           = summary,
+            expired_items     = expired_items,
+            reorder_items     = reorder_items,
+            procurement_queue = reorder_items[:5],
+            watch_items       = watch_items,
+            briefing_text     = ai_text
+        )
+
+        sent = wa.send_to_all(phones, briefing_msg, "briefing")
+        if sent:
+            stats["alerts"] += sent
+            db.log_whatsapp(store_id,"outbound",",".join(phones),
+                            briefing_msg,"briefing")
+            logger.info(f"{store_name}: briefing sent to {sent} managers")
+
+    logger.info(
+        f"{store_name}: done — "
+        f"alerts={stats['alerts']}, proc={stats['procurement']}, "
+        f"errors={stats['errors']}"
+    )
     return stats
 
 
 def run():
     start = time.time()
-    logger.info("═══ Dishii Agent starting ═══")
+    logger.info("═══ Dishii Agent v10 ═══")
 
-    # Check WhatsApp
     status = wa.get_connection_status()
-    logger.info(f"WhatsApp status: {status}")
-
+    logger.info(f"WhatsApp: {status}")
     if status != "open":
-        logger.warning("WhatsApp not connected — alerts will not be delivered")
+        logger.warning("WhatsApp offline — alerts will not be delivered")
 
-    # Get all active stores
     stores = db.get_all_stores()
-    logger.info(f"Found {len(stores)} active stores")
+    logger.info(f"Stores: {len(stores)}")
 
     if not stores:
-        logger.info("No stores found — nothing to do")
-        db.log_agent_run("scheduled", 0, 0, 0, 0, time.time() - start)
+        logger.info("No stores — nothing to do")
+        db.log_agent_run("scheduled",0,0,0,0,time.time()-start)
         return
 
-    total_alerts      = 0
-    total_procurement = 0
-    total_items       = 0
-    errors            = []
+    total_alerts = total_proc = 0
+    errors = []
 
     for store in stores:
         try:
-            stats = process_store(store)
-            total_alerts      += stats["alerts"]
-            total_procurement += stats["procurement"]
-            if stats["errors"] > 0:
-                errors.append(f"{store['name']}: {stats['errors']} errors")
+            s = process_store(store)
+            total_alerts += s["alerts"]
+            total_proc   += s["procurement"]
+            if s["errors"]:
+                errors.append(f"{store['name']}: {s['errors']} errors")
         except Exception as e:
-            err_msg = f"{store['name']}: {str(e)}"
-            logger.error(f"Store failed: {err_msg}")
-            errors.append(err_msg)
+            msg = f"{store['name']}: {e}"
+            logger.error(f"Store failed: {msg}")
+            errors.append(msg)
 
     duration = time.time() - start
-    error_str = "; ".join(errors) if errors else ""
-
     db.log_agent_run(
         run_type           = "scheduled",
         stores_checked     = len(stores),
         alerts_sent        = total_alerts,
-        procurement_created= total_procurement,
-        items_processed    = total_items,
+        procurement_created= total_proc,
+        items_processed    = 0,
         duration           = duration,
-        errors             = error_str
+        errors             = "; ".join(errors) if errors else ""
     )
 
     logger.info(
-        f"═══ Done in {duration:.1f}s — "
-        f"stores={len(stores)}, alerts={total_alerts}, "
-        f"procurement={total_procurement}, errors={len(errors)} ═══"
+        f"═══ Done {duration:.1f}s · "
+        f"stores={len(stores)} · alerts={total_alerts} · "
+        f"proc={total_proc} · errors={len(errors)} ═══"
     )
 
 
