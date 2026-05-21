@@ -517,7 +517,7 @@ def handle_incoming_message(from_phone: str, message_text: str) -> Optional[str]
                        "fresh_meat","dairy","orders","waste","value","briefing","help"],
         "manager":    ["critical","high","healthy","dry_goods","fresh_produce",
                        "fresh_meat","dairy","orders","waste","value","briefing","help"],
-        "supervisor": ["critical","high","orders","help"],
+        "supervisor": ["critical","high","healthy","orders","help"],
     }
     allowed = ROLE_PERMISSIONS.get(role, ROLE_PERMISSIONS["supervisor"])
 

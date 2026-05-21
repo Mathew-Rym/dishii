@@ -153,7 +153,7 @@ WA_LIVE   = WA_STATUS == "open"
 # ── Role-based message routing ────────────────────────────────
 
 ROLE_SEND = {
-    "owner":      ["briefing","critical_summary","financial_summary"],
+    "owner":      ["alert","procurement","briefing","upload_alert","query_response","supplier_order","critical_summary","financial_summary"],
     "manager":    ["alert","procurement","briefing","upload_alert","query_response","supplier_order"],
     "supervisor": ["alert","query_response"],
 }
