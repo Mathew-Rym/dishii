@@ -551,19 +551,15 @@ with t_stores:
         with col_b: s_loc  = st.text_input("Location",     placeholder="Westlands, Nairobi")
         with col_c: s_type = st.selectbox("Type", ["supermarket","mini_mart","restaurant","distributor","pharmacy"])
 
-        st.markdown("**Managers** (1 required, up to 4 — any country phone number)")
-        m_cols = st.columns(4)
-        mgr_inputs = []
-        for i, col in enumerate(m_cols, 1):
-            with col:
-                req = " *" if i == 1 else ""
-                mn = st.text_input(f"Name{req}", key=f"ns_mn{i}", placeholder="Full name")
-                mp = st.text_input(f"Phone{req}", key=f"ns_mp{i}", placeholder="+254... or +1... or +44...")
-                mr = st.selectbox("Role", ["manager","owner","supervisor"], key=f"ns_mr{i}")
-                if mn.strip() and mp.strip():
-                    mgr_inputs.append({"name":mn.strip(),"phone":mp.strip(),"role":mr})
+        st.markdown("**First Manager** (required — add more managers after creating the store)")
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1: mn = st.text_input("Name *", key="ns_mn1", placeholder="Full name")
+        with mc2: mp = st.text_input("Phone *", key="ns_mp1", placeholder="+254... or +1... or +44...")
+        with mc3: mr = st.selectbox("Role", ["owner","manager","supervisor"], key="ns_mr1")
+
 
         if st.form_submit_button("Create Store", type="primary"):
+            mgr_inputs = [{"name":mn.strip(),"phone":mp.strip(),"role":mr}] if mn.strip() and mp.strip() else []
             if not s_name.strip():
                 st.error("Store name required")
             elif not mgr_inputs:
