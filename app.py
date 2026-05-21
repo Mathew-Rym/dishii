@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 import db
 import whatsapp as wa
 from ai import process_upload, df_to_db_rows, generate_briefing
-import auth
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -138,15 +137,6 @@ def cached_last_run():
 WA_STATUS = cached_wa_status()
 WA_LIVE   = WA_STATUS == "open"
 
-# ── Auth gate ─────────────────────────────────────────────────
-if not auth.is_logged_in():
-    auth.render_login_page()
-    st.stop()
-
-# Multi-store picker
-if not auth.get_current_store() and not auth.is_admin():
-    auth.render_store_picker()
-    st.stop()
 
 # ── Role-based message routing ────────────────────────────────
 
@@ -308,32 +298,17 @@ with st.sidebar:
         f'</div>', unsafe_allow_html=True)
     st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
 
-    # ── User info + store switcher ────────────────────────────
-    auth.render_sidebar_user()
-    st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
-
-    # Determine selected store based on auth
-    if auth.is_admin():
-        stores    = cached_stores()
-        store_map = {s["id"]: s["name"] for s in stores}
-        st.markdown('<div style="font-size:0.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.4rem;">Active Store (Admin)</div>', unsafe_allow_html=True)
-        if store_map:
-            selected_id = st.selectbox("store", list(store_map.keys()),
-                format_func=lambda x: store_map[x], label_visibility="collapsed", key="active_store")
-        else:
-            selected_id = None
-            st.markdown('<div style="font-size:0.75rem;color:#475569;">No stores yet</div>', unsafe_allow_html=True)
+    stores    = cached_stores()
+    store_map = {s["id"]: s["name"] for s in stores}
+    st.markdown('<div style="font-size:0.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.4rem;">Active Store</div>', unsafe_allow_html=True)
+    if store_map:
+        selected_id = st.selectbox("store", list(store_map.keys()),
+            format_func=lambda x: store_map[x], label_visibility="collapsed", key="active_store")
+        mgrs_count = len(cached_managers(selected_id))
+        st.markdown(f'<div style="font-size:0.68rem;color:#475569;">{mgrs_count} manager{"s" if mgrs_count!=1 else ""}</div>', unsafe_allow_html=True)
     else:
-        current_store = auth.get_current_store()
-        selected_id   = current_store["id"] if current_store else None
-        store_map     = {selected_id: current_store["name"]} if current_store else {}
-        if current_store:
-            st.markdown(
-                f'<div style="font-size:0.68rem;font-weight:600;color:#64748b;text-transform:uppercase;'
-                f'letter-spacing:1px;margin-bottom:0.25rem;">Active Store</div>'
-                f'<div style="font-size:0.88rem;font-weight:600;color:#f1f5f9;">{current_store["name"]}</div>'
-                f'<div style="font-size:0.65rem;color:#475569;">{current_store.get("location","—")}</div>',
-                unsafe_allow_html=True)
+        selected_id = None
+        st.markdown('<div style="font-size:0.75rem;color:#475569;padding:0.4rem 0;">No stores — create one in Stores tab</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.5rem;">Thresholds</div>', unsafe_allow_html=True)
