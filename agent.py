@@ -110,6 +110,37 @@ def process_store(store: dict) -> dict:
         stats["errors"] += 1
         logger.error(f"Batch update failed: {e}")
 
+    # Batch update all items at once
+    try:
+        updates = []
+        for item in items:
+            cls = item.get("_cls", {})
+            if cls:
+                updates.append({
+                    "id": item["id"],
+                    "days_to_expiry":   item.get("days_to_expiry"),
+                    "stock_days":       cls.get("stock_days"),
+                    "waste_value":      cls.get("waste_value"),
+                    "inventory_value":  cls.get("inventory_value"),
+                    "traffic_light":    cls.get("traffic_light"),
+                    "severity_level":   cls.get("severity_level"),
+                    "risk_type":        cls.get("risk_type"),
+                    "risk_score":       cls.get("risk_score"),
+                    "risk_reason":      cls.get("risk_reason"),
+                    "risk_color":       cls.get("risk_color"),
+                    "order_required":   cls.get("order_required"),
+                    "is_expired":       cls.get("is_expired"),
+                    "show_in_priority": cls.get("show_in_priority"),
+                    "updated_at":       datetime.now().isoformat()
+                })
+        # Batch upsert
+        if updates:
+            db.get_db().table("inventory_items").upsert(updates).execute()
+            logger.info(f"{store_name}: batch updated {len(updates)} items")
+    except Exception as e:
+        stats["errors"] += 1
+        logger.error(f"Batch update failed: {e}")
+
     logger.info(
         f"{store_name}: {len(expired_items)} expired, "
         f"{len(reorder_items)} need reorder, "
