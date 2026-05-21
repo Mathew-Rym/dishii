@@ -432,10 +432,7 @@ def handle_incoming_message(from_phone: str, message_text: str) -> Optional[str]
     info  = get_store_for_phone(clean)
 
     if not info:
-        return (
-            "I don't recognise this number.\n\n"
-            "Ask your store manager to add your number to Dishii."
-        )
+        return None  # Silently ignore unregistered numbers
 
     store      = info["store"]
     manager    = info["manager"]
