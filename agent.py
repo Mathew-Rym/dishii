@@ -61,29 +61,8 @@ def process_store(store: dict) -> dict:
 
         cls = classify_item(item)
 
-        # Update classification in DB
-        try:
-            db.get_db().table("inventory_items").update({
-                "days_to_expiry":   dte,
-                "stock_days":       cls["stock_days"],
-                "waste_units":      cls["waste_units"],
-                "waste_value":      cls["waste_value"],
-                "inventory_value":  cls["inventory_value"],
-                "traffic_light":    cls["traffic_light"],
-                "severity_level":   cls["severity_level"],
-                "risk_type":        cls["risk_type"],
-                "risk_score":       cls["risk_score"],
-                "risk_reason":      cls["risk_reason"],
-                "risk_color":       cls["risk_color"],
-                "order_required":   cls["order_required"],
-                "stock_action":     cls["stock_action"],
-                "is_expired":       cls["is_expired"],
-                "show_in_priority": cls["show_in_priority"],
-                "updated_at":       datetime.now().isoformat()
-            }).eq("id", item["id"]).execute()
-        except Exception as e:
-            stats["errors"] += 1
-            logger.error(f"DB update {item.get('product_name','?')}: {e}")
+        # Queue for batch update
+        item["_cls"] = cls
 
         item.update(cls)
 
@@ -99,6 +78,37 @@ def process_store(store: dict) -> dict:
 
         if cls["severity_level"] in ("CRITICAL","HIGH"):
             critical_items.append(item)
+
+    # Batch update all items at once
+    try:
+        updates = []
+        for item in items:
+            cls = item.get("_cls", {})
+            if cls:
+                updates.append({
+                    "id": item["id"],
+                    "days_to_expiry":   item.get("days_to_expiry"),
+                    "stock_days":       cls.get("stock_days"),
+                    "waste_value":      cls.get("waste_value"),
+                    "inventory_value":  cls.get("inventory_value"),
+                    "traffic_light":    cls.get("traffic_light"),
+                    "severity_level":   cls.get("severity_level"),
+                    "risk_type":        cls.get("risk_type"),
+                    "risk_score":       cls.get("risk_score"),
+                    "risk_reason":      cls.get("risk_reason"),
+                    "risk_color":       cls.get("risk_color"),
+                    "order_required":   cls.get("order_required"),
+                    "is_expired":       cls.get("is_expired"),
+                    "show_in_priority": cls.get("show_in_priority"),
+                    "updated_at":       datetime.now().isoformat()
+                })
+        # Batch upsert
+        if updates:
+            db.get_db().table("inventory_items").upsert(updates).execute()
+            logger.info(f"{store_name}: batch updated {len(updates)} items")
+    except Exception as e:
+        stats["errors"] += 1
+        logger.error(f"Batch update failed: {e}")
 
     logger.info(
         f"{store_name}: {len(expired_items)} expired, "
