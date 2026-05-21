@@ -10,3 +10,5 @@ python-dotenv>=1.0.0
 anthropic[vertex]>=0.34.0
 google-auth>=2.28.0
 
+fastapi
+uvicorn
