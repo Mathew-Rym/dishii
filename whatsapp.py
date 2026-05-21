@@ -302,10 +302,13 @@ def msg_batch_procurement(store_name: str, items: list) -> str:
     lines = []
     total = 0
     for idx, item in enumerate(items, 1):
-        rate  = float(item.get("daily_sales_rate", 1) or 1)
-        qty   = max(1, int(rate * 14))
-        price = float(item.get("selling_price", 0) or 0)
-        val   = qty * price
+        # Use actual values from DB procurement request
+        qty   = int(item.get("suggested_qty") or item.get("daily_sales_rate", 1) or 1)
+        if qty < 2: qty = max(1, int(float(item.get("daily_sales_rate",1) or 1) * 14))
+        val   = float(item.get("total_value") or 0)
+        if val == 0:
+            price = float(item.get("unit_price") or item.get("selling_price", 0) or 0)
+            val   = qty * price
         total += val
         urg   = "🔴" if item.get("severity_level") == "CRITICAL" else "🟠"
         lines.append(

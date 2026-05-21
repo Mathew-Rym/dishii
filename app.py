@@ -36,6 +36,8 @@ html,body,[class*="css"]{font-family:'Inter',sans-serif;}
 .main .block-container{padding-top:0 !important;max-width:1500px;}
 [data-testid="stSidebar"]{background:#080f1a;border-right:1px solid #1a2535;}
 footer{visibility:hidden;}#MainMenu{visibility:hidden;}
+/* Auto-refresh indicator */
+.refresh-bar{font-size:0.6rem;color:#475569;text-align:right;padding:2px 8px;}
 
 /* ── Persistent header ── */
 .op-header{
@@ -133,6 +135,16 @@ def cached_wa_logs(sid):
 @st.cache_data(ttl=30)
 def cached_last_run():
     return db.get_last_agent_run()
+
+# Auto-refresh every 30 seconds
+import time as _time
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = _time.time()
+_elapsed = int(_time.time() - st.session_state.last_refresh)
+if _elapsed >= 30:
+    st.session_state.last_refresh = _time.time()
+    st.cache_data.clear()
+    st.rerun()
 
 WA_STATUS = cached_wa_status()
 WA_LIVE   = WA_STATUS == "open"
@@ -863,10 +875,13 @@ with t_wa:
                 text      = log.get("message_text","")
                 bg        = "#0d2535" if direction=="inbound" else "#0d1b2e"
                 radius    = "10px 10px 10px 0" if direction=="inbound" else "0 10px 10px 10px"
+                # Find manager name for this phone
+                mgr_name  = next((m["name"] for m in active_mgrs if m.get("phone","").replace("+","") == phone.replace("+","")), None)
+                mgr_tag   = f' · <span style="color:#10b981;font-weight:500;">{mgr_name}</span>' if mgr_name else ""
                 st.markdown(
                     f'<div style="margin-bottom:0.75rem;">'
                     f'<div style="font-size:0.62rem;color:#475569;margin-bottom:3px;">'
-                    f'{sat} &nbsp;<span style="color:{mc};font-weight:500;">{mtype}</span>&nbsp; {arrow} +{phone}</div>'
+                    f'{sat} &nbsp;<span style="color:{mc};font-weight:500;">{mtype}</span>&nbsp; {arrow} +{phone}{mgr_tag}</div>'
                     f'<div style="background:{bg};border:1px solid #1a2f4a;border-radius:{radius};'
                     f'padding:0.65rem 0.9rem;font-size:0.78rem;color:#cbd5e1;white-space:pre-wrap;">'
                     f'{text[:500]}{"..." if len(text)>500 else ""}'

@@ -574,6 +574,12 @@ def handle_incoming_message(from_phone: str, message_text: str) -> Optional[str]
         pending = get_pending_procurement(store_id)
         if not pending:
             return f"No pending orders for {store_name}. All stock levels are healthy."
+        # Use actual values from DB
+        for item in pending:
+            if not item.get("daily_sales_rate"):
+                item["daily_sales_rate"] = item.get("suggested_qty", 14) / 14
+            if not item.get("selling_price"):
+                item["selling_price"] = item.get("unit_price", 0)
         return wa.msg_batch_procurement(store_name, pending)
 
     if intent in ("waste","value"):
@@ -670,3 +676,48 @@ if __name__ == "__main__":
     print(f"From +{phone}: '{msg}'")
     reply = handle_incoming_message(phone, msg)
     print(f"\n--- Reply ---\n{reply}")
+
+def send_pdf_report(phone: str, store_id: str, store_name: str,
+                    report_type: str = "full") -> str:
+    """Generate and send PDF report via WhatsApp."""
+    import io
+    import whatsapp as wa
+    import requests as _req
+    import base64
+
+    try:
+        items = get_items_by_severity(store_id, "CRITICAL") + \
+                get_items_by_severity(store_id, "HIGH")
+
+        # Build text report
+        lines = [
+            f"DISHII INVENTORY REPORT — {store_name}",
+            f"Generated: {__import__('datetime').datetime.now().strftime('%d %b %Y %H:%M')}",
+            "=" * 50,
+        ]
+        for item in items[:30]:
+            lines.append(
+                f"{item.get('traffic_light','')} {item['product_name']}: "
+                f"{int(item.get('current_stock',0))} units | "
+                f"{item.get('risk_reason','')}"
+            )
+
+        summ = get_financial_summary(store_id)
+        lines += [
+            "=" * 50,
+            f"Total Value: KES {float(summ.get('total_value',0)):,.0f}",
+            f"Waste Risk: KES {float(summ.get('waste_value',0)):,.0f}",
+            f"Health Score: {summ.get('health_score',0)}%",
+        ]
+
+        report_text = "\n".join(lines)
+
+        # Send as text (Evolution API free tier doesn't support file upload easily)
+        # For now send as formatted text message
+        clean = wa.normalize_phone(phone)
+        wa.send(clean, f"📊 *Inventory Report — {store_name}*\n\n```\n{report_text[:3000]}\n```",
+                "query_response", skip_dedup=True)
+        return f"Report sent to +{clean}"
+
+    except Exception as e:
+        return f"Failed to generate report: {e}"
