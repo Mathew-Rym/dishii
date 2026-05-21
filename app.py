@@ -23,7 +23,7 @@ from ai import process_upload, df_to_db_rows, generate_briefing
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="Dishii",
-    page_icon="assets/dishii-logo.png",
+    page_icon="🍔",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -171,29 +171,14 @@ def get_phones_for_type(store_id: str, msg_type: str) -> list:
 
 def wa_send_typed(store_id: str, text: str, msg_type: str,
                    procurement_id: str = None) -> int:
-    """Send WhatsApp to the right managers based on message type and role.
-    Logs one entry per manager for full audit trail."""
-    managers = db.get_managers(store_id)
-    sent = 0
-    for m in managers:
-        role    = m.get("role","manager")
-        allowed = ROLE_SEND.get(role, ROLE_SEND["supervisor"])
-        if msg_type not in allowed or not m.get("phone"):
-            continue
-        phone = m["phone"]
+    """Send WhatsApp to the right managers based on message type and role."""
+    phones = get_phones_for_type(store_id, msg_type)
+    sent   = 0
+    for phone in phones:
         if wa.send(phone, text):
             sent += 1
-            # Log individually per manager
-            db.log_whatsapp(
-                store_id         = store_id,
-                direction        = "outbound",
-                phone            = phone,
-                message          = text,
-                msg_type         = msg_type,
-                procurement_id   = procurement_id,
-                manager_name     = m.get("name",""),
-                manager_role     = role
-            )
+    if phones:
+        db.log_whatsapp(store_id, "outbound", ",".join(phones), text, msg_type, procurement_id)
     return sent
 
 
@@ -551,15 +536,19 @@ with t_stores:
         with col_b: s_loc  = st.text_input("Location",     placeholder="Westlands, Nairobi")
         with col_c: s_type = st.selectbox("Type", ["supermarket","mini_mart","restaurant","distributor","pharmacy"])
 
-        st.markdown("**First Manager** (required — add more managers after creating the store)")
-        mc1, mc2, mc3 = st.columns(3)
-        with mc1: mn = st.text_input("Name *", key="ns_mn1", placeholder="Full name")
-        with mc2: mp = st.text_input("Phone *", key="ns_mp1", placeholder="+254... or +1... or +44...")
-        with mc3: mr = st.selectbox("Role", ["owner","manager","supervisor"], key="ns_mr1")
-
+        st.markdown("**Managers** (1 required, up to 4 — any country phone number)")
+        m_cols = st.columns(4)
+        mgr_inputs = []
+        for i, col in enumerate(m_cols, 1):
+            with col:
+                req = " *" if i == 1 else ""
+                mn = st.text_input(f"Name{req}", key=f"ns_mn{i}", placeholder="Full name")
+                mp = st.text_input(f"Phone{req}", key=f"ns_mp{i}", placeholder="+254... or +1... or +44...")
+                mr = st.selectbox("Role", ["manager","owner","supervisor"], key=f"ns_mr{i}")
+                if mn.strip() and mp.strip():
+                    mgr_inputs.append({"name":mn.strip(),"phone":mp.strip(),"role":mr})
 
         if st.form_submit_button("Create Store", type="primary"):
-            mgr_inputs = [{"name":mn.strip(),"phone":mp.strip(),"role":mr}] if mn.strip() and mp.strip() else []
             if not s_name.strip():
                 st.error("Store name required")
             elif not mgr_inputs:
@@ -811,23 +800,15 @@ with t_proc:
             else:
                 for req in all_p[:25]:
                     sc = {"approved":"#10b981","rejected":"#ef4444","supplier_notified":"#3b82f6","awaiting_manager":"#f59e0b"}.get(req.get("status",""),"#475569")
-                    responded = req.get("manager_phone","") or ""
+                    responded = req.get("manager_phone","")
                     resp_time = (req.get("responded_at","") or "")[:16].replace("T"," ")
-                    # Look up manager name
-                    resp_name = next((m["name"] for m in active_mgrs 
-                                     if m.get("phone","").replace("+","") == responded.replace("+","")), None)
-                    resp_role = next((m.get("role","") for m in active_mgrs 
-                                     if m.get("phone","").replace("+","") == responded.replace("+","")), None)
-                    role_colors = {"owner":"#10b981","manager":"#3b82f6","supervisor":"#f59e0b"}
-                    rc = role_colors.get(resp_role,"#64748b")
-                    resp_label = f'<span style="color:{rc};">{resp_name} ({resp_role.title()})</span>' if resp_name else (f'+{responded}' if responded and responded != "dashboard" else "Dashboard")
                     st.markdown(
                         f'<div class="icard" style="border-left-color:{sc};padding:0.55rem 0.875rem;">'
                         f'<div style="font-size:0.82rem;font-weight:600;color:#e2e8f0;">{req["product_name"]}</div>'
                         f'<div style="font-size:0.65rem;color:#64748b;margin-top:0.2rem;">'
                         f'{req.get("suggested_qty",0)} units &middot; {req.get("status","?").replace("_"," ").title()}'
-                        + (f' &middot; {resp_label}' if responded else "")
-                        + (f' &middot; {resp_time}' if resp_time else "")
+                        + (f' &middot; by +{responded}' if responded and responded != "dashboard" else "")
+                        + (f' at {resp_time}' if resp_time else "")
                         + '</div></div>', unsafe_allow_html=True)
 
             # Download order history
@@ -894,37 +875,13 @@ with t_wa:
                 text      = log.get("message_text","")
                 bg        = "#0d2535" if direction=="inbound" else "#0d1b2e"
                 radius    = "10px 10px 10px 0" if direction=="inbound" else "0 10px 10px 10px"
-                # Use stored manager name/role from log entry
-                log_mgr_name = log.get("manager_name","")
-                log_mgr_role = log.get("manager_role","")
-                role_colors  = {"owner":"#10b981","manager":"#3b82f6","supervisor":"#f59e0b"}
-
-                if log_mgr_name and log_mgr_role:
-                    rc      = role_colors.get(log_mgr_role,"#64748b")
-                    mgr_tag = f' · <span style="color:{rc};font-weight:500;">{log_mgr_name} ({log_mgr_role.title()})</span>'
-                elif mtype == "supplier_order":
-                    mgr_tag = ' · <span style="color:#8b5cf6;font-weight:500;">Supplier</span>'
-                elif mtype == "briefing":
-                    # Try to find by phone
-                    clean_phone = phone.replace("+","").replace(" ","").lstrip("+")
-                    mgr_match   = next((m for m in active_mgrs if m.get("phone","").replace("+","") == clean_phone), None)
-                    if mgr_match:
-                        rc      = role_colors.get(mgr_match.get("role","manager"),"#64748b")
-                        mgr_tag = f' · <span style="color:{rc};font-weight:500;">{mgr_match["name"]} ({mgr_match.get("role","").title()})</span>'
-                    else:
-                        mgr_tag = ' · <span style="color:#10b981;font-weight:500;">All Managers</span>'
-                else:
-                    clean_phone = phone.replace("+","").replace(" ","").lstrip("+")
-                    mgr_match   = next((m for m in active_mgrs if m.get("phone","").replace("+","") == clean_phone), None)
-                    if mgr_match:
-                        rc      = role_colors.get(mgr_match.get("role","manager"),"#64748b")
-                        mgr_tag = f' · <span style="color:{rc};font-weight:500;">{mgr_match["name"]} ({mgr_match.get("role","").title()})</span>'
-                    else:
-                        mgr_tag = ""
+                # Find manager name for this phone
+                mgr_name  = next((m["name"] for m in active_mgrs if m.get("phone","").replace("+","") == phone.replace("+","")), None)
+                mgr_tag   = f' · <span style="color:#10b981;font-weight:500;">{mgr_name}</span>' if mgr_name else ""
                 st.markdown(
                     f'<div style="margin-bottom:0.75rem;">'
                     f'<div style="font-size:0.62rem;color:#475569;margin-bottom:3px;">'
-                    f'{sat} &nbsp;<span style="color:{mc};font-weight:500;">{mtype}</span>&nbsp; {arrow} +{phone.lstrip("+")}{mgr_tag}</div>'
+                    f'{sat} &nbsp;<span style="color:{mc};font-weight:500;">{mtype}</span>&nbsp; {arrow} +{phone}{mgr_tag}</div>'
                     f'<div style="background:{bg};border:1px solid #1a2f4a;border-radius:{radius};'
                     f'padding:0.65rem 0.9rem;font-size:0.78rem;color:#cbd5e1;white-space:pre-wrap;">'
                     f'{text[:500]}{"..." if len(text)>500 else ""}'
