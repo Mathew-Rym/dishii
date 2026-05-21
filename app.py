@@ -530,7 +530,7 @@ with t_stores:
 
     # ── Section 1: Create new store ──────────────────────────
     st.markdown("#### Create New Store")
-    with st.form("new_store_form", clear_on_submit=True):
+    with st.form("new_store_form", clear_on_submit=False):
         col_a, col_b, col_c = st.columns(3)
         with col_a: s_name = st.text_input("Store name *", placeholder="e.g. Quikmart Westlands")
         with col_b: s_loc  = st.text_input("Location",     placeholder="Westlands, Nairobi")
@@ -554,19 +554,21 @@ with t_stores:
             elif not mgr_inputs:
                 st.error("Add at least 1 manager with name and phone")
             else:
-                new_store = db.create_store(s_name.strip(), s_loc.strip(), s_type)
-                if new_store:
-                    for m in mgr_inputs:
-                        db.add_manager(new_store["id"], m["name"], m["phone"], m["role"])
-                        clean = m["phone"].replace("+","").replace(" ","").replace("-","")
-                        wa.send(clean, wa.msg_welcome(s_name.strip(), m["name"]))
-                    st.success(f"Store '{s_name}' created with {len(mgr_inputs)} manager(s). Welcome messages sent.")
-                    # Switch to the new store
-                    st.session_state["active_store"] = new_store["id"]
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("Failed to create store")
+                try:
+                    new_store = db.create_store(s_name.strip(), s_loc.strip(), s_type)
+                    if new_store:
+                        for m in mgr_inputs:
+                            db.add_manager(new_store["id"], m["name"], m["phone"], m["role"])
+                            clean = m["phone"].replace("+","").replace(" ","").replace("-","")
+                            wa.send(clean, wa.msg_welcome(s_name.strip(), m["name"]))
+                        st.success(f"✅ Store '{s_name}' created! Switching now...")
+                        st.session_state["active_store"] = new_store["id"]
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("Failed to create store — db returned None")
+                except Exception as e:
+                    st.error(f"Error creating store: {e}")
 
     st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
 
@@ -640,7 +642,7 @@ with t_upload:
         uf = st.file_uploader("Choose file", type=["xlsx","csv","xls"])
         if uf is not None:
             fbytes = uf.getvalue(); fhash = db.file_hash(fbytes); uf.seek(0)
-            if db.is_already_processed(fhash):
+            if db.is_already_processed(fhash, t_id):
                 st.warning("This exact file was already uploaded. Modify it or upload a new one.")
             else:
                 st.info(f"Ready: **{uf.name}** for **{t_store['name']}**")

@@ -140,9 +140,12 @@ def remove_manager(manager_id: str) -> bool:
 def file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
 
-def is_already_processed(fhash: str) -> bool:
+def is_already_processed(fhash: str, store_id: str = None) -> bool:
     try:
-        r = get_db().table("inventory_uploads").select("id").eq("file_hash", fhash).execute()
+        q = get_db().table("inventory_uploads").select("id").eq("file_hash", fhash)
+        if store_id:
+            q = q.eq("store_id", store_id)
+        r = q.execute()
         return len(r.data) > 0
     except Exception:
         return False
