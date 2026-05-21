@@ -11,6 +11,19 @@ from typing import Optional, List, Dict, Tuple
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
+import re as _re
+
+def normalize_phone(phone: str, default_country: str = "254") -> str:
+    digits = _re.sub(r"[^\d]", "", str(phone))
+    if not digits: return ""
+    if digits.startswith("0") and len(digits) >= 9:
+        return default_country + digits[1:]
+    if len(digits) == 9 and digits.startswith("7"):
+        return default_country + digits
+    return digits
+
+
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
