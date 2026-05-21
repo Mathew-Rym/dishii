@@ -561,6 +561,8 @@ with t_stores:
                         clean = m["phone"].replace("+","").replace(" ","").replace("-","")
                         wa.send(clean, wa.msg_welcome(s_name.strip(), m["name"]))
                     st.success(f"Store '{s_name}' created with {len(mgr_inputs)} manager(s). Welcome messages sent.")
+                    # Switch to the new store
+                    st.session_state["active_store"] = new_store["id"]
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -618,7 +620,10 @@ with t_upload:
     if not all_stores_up:
         st.warning("Create a store first.")
     else:
+        # Default to currently selected store
+        default_idx = next((i for i,s in enumerate(all_stores_up) if s["id"]==selected_id), 0)
         t_id    = st.selectbox("Upload for:", [s["id"] for s in all_stores_up],
+                               index=default_idx,
                                format_func=lambda x: next(s["name"] for s in all_stores_up if s["id"]==x),
                                key="upload_target")
         t_store = db.get_store_by_id(t_id)
