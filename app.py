@@ -594,6 +594,21 @@ with t_stores:
                 f'<div class="icard-meta">{mgr_txt}</div>'
                 f'</div>', unsafe_allow_html=True)
 
+            # List managers with remove buttons
+            ml2 = cached_managers(s["id"])
+            if ml2:
+                with st.expander(f"Managers ({len(ml2)}) — {s['name']}"):
+                    for m in ml2:
+                        c1, c2 = st.columns([5,1])
+                        with c1:
+                            st.markdown(f"**{m['name']}** · {m.get('role','manager').title()} · +{m['phone']}")
+                        with c2:
+                            if st.button("✕", key=f"rm_{m['id']}", help=f"Remove {m['name']}"):
+                                db.get_db().table("store_managers").update({"is_active": False}).eq("id", m["id"]).execute()
+                                st.success(f"Removed {m['name']}")
+                                st.cache_data.clear()
+                                st.rerun()
+
             # Add manager to existing store
             with st.expander(f"Add manager to {s['name']}"):
                 with st.form(f"add_mgr_{s['id']}"):
