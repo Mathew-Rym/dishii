@@ -25,6 +25,16 @@ def normalize_phone(phone: str, default_country: str = "254") -> str:
 
 
 load_dotenv()
+
+# Load from Streamlit secrets if available
+try:
+    import streamlit as st
+    import os
+    for key in ["SUPABASE_URL","SUPABASE_KEY","EVOLUTION_URL","EVOLUTION_KEY","EVOLUTION_INSTANCE","GCP_PROJECT_ID","GCP_REGION"]:
+        if key in st.secrets and not os.environ.get(key):
+            os.environ[key] = st.secrets[key]
+except Exception:
+    pass
 logger = logging.getLogger(__name__)
 
 # ── Client ────────────────────────────────────────────────────

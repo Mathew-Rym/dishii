@@ -17,6 +17,11 @@ from typing import Optional, List, Dict
 from dotenv import load_dotenv
 
 load_dotenv()
+try:
+    import streamlit as st, os
+    for k in ["SUPABASE_URL","SUPABASE_KEY","EVOLUTION_URL","EVOLUTION_KEY","EVOLUTION_INSTANCE"]:
+        if k in st.secrets and not os.environ.get(k): os.environ[k] = st.secrets[k]
+except: pass
 logger = logging.getLogger(__name__)
 
 EVOLUTION_URL      = os.getenv("EVOLUTION_URL", "").rstrip("/")
