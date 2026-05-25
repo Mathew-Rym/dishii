@@ -363,15 +363,15 @@ def _rule_based_briefing(store_name: str, summary: dict, critical_items: list) -
 # ════════════════════════════════════════════════════════════════
 
 COLUMN_MAP = {
-    "product_name":    ["product_name","product","item","name","description","sku_name","item_name","item description"],
+    "product_name":    ["product_name","product","item","name","description","sku_name","item_name","item_description","item description","product_name"],
     "expiry_date":     ["expiry_date","expiry","best_before","expiration_date","exp_date","use_by","expiration"],
     "current_stock":   ["current_stock","stock","quantity","qty","inventory","units","on_hand","balance","stock_on_hand"],
-    "daily_sales_rate":["daily_sales_rate","daily_sales","sales_rate","velocity","avg_daily_sales","movement","avg_sales","sold_per_day"],
+    "daily_sales_rate":["daily_sales_rate","daily_sales","sales_rate","velocity","avg_daily_sales","movement","avg_sales","sold_per_day","daily_sales_rate"],
     "supplier":        ["supplier","vendor","supplier_name","vendor_name","source"],
-    "selling_price":   ["selling_price","price","retail_price","unit_price","cost","sale_price"],
+    "selling_price":   ["selling_price","price","retail_price","unit_price","cost","sale_price","selling_price_(kes)"],
     "supplier_phone":  ["supplier_phone","supplier_whatsapp","supplier_contact","phone","tel"],
     "supplier_email":  ["supplier_email","email"],
-    "cost_price":      ["cost_price","cost","purchase_price","buy_price"]
+    "cost_price":      ["cost_price","cost","purchase_price","buy_price","cost_price_(kes)"]
 }
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
