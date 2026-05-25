@@ -665,7 +665,7 @@ with t_upload:
                                 uid  = db.create_upload_record(t_id, uf.name, fhash)
                                 df_p, summ = process_upload(raw, t_id, uid, red_t, amber_t, stock_w)
                                 db.update_upload_summary(uid, summ)
-                                rows = df_to_db_rows(df_p)
+                                rows = df_to_db_rows(df_p, t_id, uid)
                                 if db.insert_inventory_items(rows):
                                     st.success(f"{len(rows)} SKUs saved for **{t_store['name']}**")
                                     c1,c2,c3,c4 = st.columns(4)
