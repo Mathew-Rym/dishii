@@ -203,7 +203,9 @@ def insert_inventory_items(rows: List[Dict]) -> bool:
             get_db().table("inventory_items").insert(rows[i:i+100]).execute()
         return True
     except Exception as e:
-        logger.error(f"insert_inventory_items: {e}")
+        logger.error(f"insert_inventory_items: {e}", exc_info=True)
+        print(f"INSERT ERROR: {e}")
+        import traceback; traceback.print_exc()
         return False
 
 def get_latest_inventory(store_id: str) -> List[Dict]:

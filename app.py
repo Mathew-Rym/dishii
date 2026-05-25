@@ -659,13 +659,20 @@ with t_upload:
                     with st.spinner(f"Processing {uf.name}..."):
                         try:
                             uf.seek(0)
-                            raw = pd.read_excel(uf) if not uf.name.lower().endswith(".csv") else pd.read_csv(uf)
+                            if not uf.name.lower().endswith(".csv"):
+                                raw = pd.read_excel(uf, engine="openpyxl")
+                                # Replace formula strings with NaN
+                                import numpy as np
+                                for col in raw.columns:
+                                    raw[col] = raw[col].apply(lambda x: np.nan if isinstance(x, str) and str(x).startswith("=") else x)
+                            else:
+                                raw = pd.read_csv(uf)
                             if raw.empty: st.error("File is empty")
                             else:
                                 uid  = db.create_upload_record(t_id, uf.name, fhash)
                                 df_p, summ = process_upload(raw, t_id, uid, red_t, amber_t, stock_w)
                                 db.update_upload_summary(uid, summ)
-                                rows = df_to_db_rows(df_p, t_id, uid)
+                                rows = df_to_db_rows(df_p)
                                 if db.insert_inventory_items(rows):
                                     st.success(f"{len(rows)} SKUs saved for **{t_store['name']}**")
                                     c1,c2,c3,c4 = st.columns(4)
@@ -725,9 +732,11 @@ with t_upload:
 
                                     st.cache_data.clear()
                                 else:
-                                    st.error("Failed to save to database")
+                                    st.warning("This file was already uploaded. Upload a new inventory file to update.")
                         except Exception as e:
+                            import traceback
                             st.error(f"Upload failed: {e}")
+                            st.code(traceback.format_exc())
                             logger.error(f"Upload error: {e}", exc_info=True)
 
 
