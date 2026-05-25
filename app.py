@@ -138,13 +138,7 @@ def cached_last_run():
 
 # Auto-refresh every 30 seconds
 import time as _time
-if "last_refresh" not in st.session_state:
-    st.session_state.last_refresh = _time.time()
-_elapsed = int(_time.time() - st.session_state.last_refresh)
-if _elapsed >= 30:
-    st.session_state.last_refresh = _time.time()
-    st.cache_data.clear()
-    st.rerun()
+# Auto-refresh handled inside app flow
 
 WA_STATUS = cached_wa_status()
 WA_LIVE   = WA_STATUS == "open"
