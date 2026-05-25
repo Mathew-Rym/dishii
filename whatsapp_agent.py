@@ -450,9 +450,26 @@ def handle_incoming_message(from_phone: str, message_text: str) -> Optional[str]
         ctx     = state_data.get("context", {})
 
         if state == "awaiting_rejection_reason":
+            txt = message_text.strip()
+            # Handle cancel
+            if txt.lower() in ("cancel","4","exit"):
+                conv.clear_state(clean)
+                return "Order cancelled completely. ✅"
+            # Try to parse as rejection followup
             if parsed.get("action") == "REJECTION_FOLLOWUP":
                 return handle_rejection_reason(clean, parsed, ctx, store_id)
-            # User typed something else — offer options again
+            # Try to parse manually — "1 50", "2 Brookside", "3 3", "1", "2", "3"
+            import re as _re
+            m = _re.match(r"^([1-4])\s*(.*)", txt)
+            if m:
+                opt, val = m.group(1), m.group(2).strip()
+                sub_map = {"1":"REDUCE_QTY","2":"CHANGE_SUPPLIER","3":"DELAY_ORDER","4":"CANCEL"}
+                parsed["action"]     = "REJECTION_FOLLOWUP"
+                parsed["option"]     = int(opt)
+                parsed["sub_action"] = sub_map.get(opt, "CANCEL")
+                parsed["detail"]     = val
+                return handle_rejection_reason(clean, parsed, ctx, store_id)
+            # Unknown — remind options
             return (
                 f"Please reply with:\n"
                 f"*1 [qty]* — e.g. `1 50`\n"
