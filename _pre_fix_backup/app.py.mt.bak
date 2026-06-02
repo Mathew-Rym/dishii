@@ -283,28 +283,6 @@ def render_header(store, items, summary, last_upload):
 
 
 # ════════════════════════════════════════════════════════════════
-# AUTH GATE — require login & isolate tenants
-# ════════════════════════════════════════════════════════════════
-import auth
-if not auth.is_logged_in():
-    auth.render_login_page()
-    st.stop()
-if (not auth.is_admin() and auth.get_current_store() is None
-        and len(st.session_state.get("_mgr_stores", [])) > 1):
-    auth.render_store_picker()
-    st.stop()
-
-def _allowed_stores():
-    """Admin sees all stores; a manager only their own."""
-    return db.get_all_stores() if auth.is_admin() else auth.get_manager_stores()
-
-def _assert_access(store_id):
-    if store_id and not auth.is_admin():
-        if store_id not in {s["id"] for s in auth.get_manager_stores()}:
-            st.error("You don't have access to that store.")
-            st.stop()
-
-# ════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ════════════════════════════════════════════════════════════════
 with st.sidebar:
@@ -326,7 +304,7 @@ with st.sidebar:
         f'</div>', unsafe_allow_html=True)
     st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
 
-    stores    = _allowed_stores()
+    stores    = cached_stores()
     store_map = {s["id"]: s["name"] for s in stores}
     st.markdown('<div style="font-size:0.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.4rem;">Active Store</div>', unsafe_allow_html=True)
     if store_map:
@@ -357,16 +335,11 @@ with st.sidebar:
     if st.button("Refresh", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
-    if st.button("Sign out", use_container_width=True):
-        auth.logout()
-        st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════
 # LOAD ACTIVE STORE DATA (shared across all tabs)
 # ════════════════════════════════════════════════════════════════
-_assert_access(selected_id)
 active_store  = db.get_store_by_id(selected_id) if selected_id else None
 active_items  = cached_inventory(selected_id)   if selected_id else []
 active_mgrs   = cached_managers(selected_id)    if selected_id else []
@@ -654,7 +627,7 @@ with t_upload:
     st.markdown("### Upload Inventory")
     st.caption("Upload Excel or CSV. Columns auto-detected. Duplicate uploads blocked by file hash.")
 
-    all_stores_up = _allowed_stores()
+    all_stores_up = cached_stores()
     if not all_stores_up:
         st.warning("Create a store first.")
     else:
@@ -705,7 +678,6 @@ with t_upload:
                                 rows = df_to_db_rows(df_p)
                                 if db.insert_inventory_items(rows):
                                     st.success(f"{len(rows)} SKUs saved for **{t_store['name']}**")
-                                    db.cleanup_old_uploads(t_id, keep=3)
                                     c1,c2,c3,c4 = st.columns(4)
                                     c1.metric("SKUs",    summ["total"])
                                     c2.metric("Critical",summ["critical"])

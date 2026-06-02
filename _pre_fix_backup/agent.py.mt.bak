@@ -201,7 +201,6 @@ def run():
     if status != "open":
         logger.warning("WhatsApp offline — alerts will not be delivered")
 
-    db.cleanup_housekeeping()
     stores = db.get_all_stores()
     logger.info(f"Stores: {len(stores)}")
 
