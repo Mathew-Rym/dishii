@@ -166,3 +166,4 @@ cython_debug/
 dishii.json
 *.json
 .streamlit/secrets.toml
+_pre_fix_backup/
