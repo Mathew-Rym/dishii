@@ -670,9 +670,6 @@ with t_upload:
                             if raw.empty: st.error("File is empty")
                             else:
                                 uid  = db.create_upload_record(t_id, uf.name, fhash)
-                                if not uid:
-                                    st.error("Could not create upload record — check the database connection.")
-                                    st.stop()
                                 df_p, summ = process_upload(raw, t_id, uid, red_t, amber_t, stock_w)
                                 db.update_upload_summary(uid, summ)
                                 rows = df_to_db_rows(df_p)
