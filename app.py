@@ -30,7 +30,8 @@ except ImportError:
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="Dishii",
-    page_icon="🍔",
+    page_icon=(__import__("PIL.Image",fromlist=["Image"]).Image.open("assets/dishii-logo.png")
+           if __import__("os").path.exists("assets/dishii-logo.png") else "🍽️"),
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -296,6 +297,9 @@ import auth
 if not auth.is_logged_in():
     auth.render_login_page()
     st.stop()
+if st.session_state.get("_new_user_phone"):
+    auth.render_onboarding()
+    st.stop()
 if (not auth.is_admin() and auth.get_current_store() is None
         and len(st.session_state.get("_mgr_stores", [])) > 1):
     auth.render_store_picker()
@@ -553,108 +557,133 @@ with t_dash:
 
 # ══════════════════════════════════ STORES & MANAGERS ══════════
 with t_stores:
+    st.markdown("""<style>
+    .sm-card{background:#0d1b2e;border:1px solid #1a2f4a;border-radius:14px;
+             padding:1.25rem 1.5rem;margin-bottom:1rem;transition:border-color .2s;}
+    .sm-card.active{border-left:3px solid #10b981;}
+    .sm-name{font-size:1rem;font-weight:600;color:#f1f5f9;margin-bottom:0.2rem;}
+    .sm-meta{font-size:0.75rem;color:#64748b;margin-bottom:0.75rem;}
+    .sm-chip{display:inline-flex;align-items:center;gap:5px;background:#1e293b;
+             border-radius:20px;padding:3px 10px;font-size:0.72rem;color:#94a3b8;
+             margin:2px;}
+    .sm-role{font-size:0.6rem;background:#1e3a5f;color:#60a5fa;
+             padding:1px 6px;border-radius:8px;font-weight:500;}
+    .sm-badge-live{font-size:0.65rem;background:#064e3b;color:#10b981;
+                   padding:2px 8px;border-radius:12px;}
+    .sm-badge-empty{font-size:0.65rem;background:#1e293b;color:#64748b;
+                    padding:2px 8px;border-radius:12px;}
+    </style>""", unsafe_allow_html=True)
+
+    # ── Header ────────────────────────────────────────────────
     st.markdown("### Stores & Managers")
-    st.caption("Each store is fully isolated. All managers stored in database — no hardcoded numbers.")
+    st.caption("Each store is fully isolated. Managers log in with their phone — no passwords needed.")
+    st.markdown("")
 
-    # ── Section 1: Create new store ──────────────────────────
-    st.markdown("#### Create New Store")
-    with st.form("new_store_form", clear_on_submit=False):
-        col_a, col_b, col_c = st.columns(3)
-        with col_a: s_name = st.text_input("Store name *", placeholder="e.g. Quikmart Westlands")
-        with col_b: s_loc  = st.text_input("Location",     placeholder="Westlands, Nairobi")
-        with col_c: s_type = st.selectbox("Type", ["supermarket","mini_mart","restaurant","distributor","pharmacy"])
+    # ── Create new store ──────────────────────────────────────
+    _all_s = _allowed_stores()
+    with st.expander("➕  Add a new store", expanded=len(_all_s) == 0):
+        with st.form("new_store_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1: s_name = st.text_input("Store name *", placeholder="Quikmart Westlands")
+            with c2: s_loc  = st.text_input("Location",     placeholder="Nairobi")
+            with c3: s_type = st.selectbox("Type",
+                ["supermarket","mini_mart","restaurant","distributor","pharmacy","wholesale"])
 
-        st.markdown("**Managers** (1 required, up to 4 — any country phone number)")
-        m_cols = st.columns(4)
-        mgr_inputs = []
-        for i, col in enumerate(m_cols, 1):
-            with col:
-                req = " *" if i == 1 else ""
-                mn = st.text_input(f"Name{req}", key=f"ns_mn{i}", placeholder="Full name")
-                mp = st.text_input(f"Phone{req}", key=f"ns_mp{i}", placeholder="+254... or +1... or +44...")
-                mr = st.selectbox("Role", ["manager","owner","supervisor"], key=f"ns_mr{i}")
-                if mn.strip() and mp.strip():
-                    mgr_inputs.append({"name":mn.strip(),"phone":mp.strip(),"role":mr})
+            st.markdown("---")
+            st.markdown("**First manager** — you can add more after creating")
+            m1, m2, m3 = st.columns([2, 2, 1])
+            with m1: mn = st.text_input("Full name *",       key="ns_mn1", placeholder="e.g. Jane Mwangi")
+            with m2: mp = st.text_input("WhatsApp number *", key="ns_mp1", placeholder="+254 720 521 291")
+            with m3: mr = st.selectbox("Role", ["owner","manager","supervisor"], key="ns_mr1")
 
-        if st.form_submit_button("Create Store", type="primary"):
-            if not s_name.strip():
-                st.error("Store name required")
-            elif not mgr_inputs:
-                st.error("Add at least 1 manager with name and phone")
-            else:
-                try:
-                    new_store = db.create_store(s_name.strip(), s_loc.strip(), s_type)
-                    if new_store:
-                        for m in mgr_inputs:
-                            db.add_manager(new_store["id"], m["name"], m["phone"], m["role"])
-                            clean = m["phone"].replace("+","").replace(" ","").replace("-","")
-                            wa.send(clean, wa.msg_welcome(s_name.strip(), m["name"]))
-                        st.success(f"✅ Store '{s_name}' created! Switching now...")
-                        st.session_state["active_store"] = new_store["id"]
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error("Failed to create store — db returned None")
-                except Exception as e:
-                    st.error(f"Error creating store: {e}")
-
-    st.markdown('<div class="sdiv"></div>', unsafe_allow_html=True)
-
-    # ── Section 2: Existing stores ───────────────────────────
-    st.markdown("#### Your Stores")
-    all_s = cached_stores()
-    if not all_s:
-        st.markdown('<div style="color:#475569;font-size:0.85rem;">No stores yet.</div>', unsafe_allow_html=True)
-    else:
-        for s in all_s:
-            ml      = cached_managers(s["id"])
-            is_sel  = s["id"] == selected_id
-            bc      = "#10b981" if is_sel else "#1a2f4a"
-            has_inv = len(cached_inventory(s["id"])) > 0
-            mgr_txt = " &middot; ".join([f"{m['name']} ({m.get('role','mgr')}) +{m['phone']}" for m in ml]) or "No managers"
-
-            st.markdown(
-                f'<div class="icard" style="border-left-color:{bc};">'
-                f'<div style="display:flex;justify-content:space-between;">'
-                f'<div class="icard-title">{"✓ " if is_sel else ""}{s["name"]}</div>'
-                f'<div style="font-size:0.65rem;color:{"#10b981" if has_inv else "#475569"};">{"Inventory loaded" if has_inv else "No inventory"}</div></div>'
-                f'<div class="icard-reason">{s.get("location","—")} &middot; {s.get("store_type","—")}</div>'
-                f'<div class="icard-meta">{mgr_txt}</div>'
-                f'</div>', unsafe_allow_html=True)
-
-            # List managers with remove buttons
-            ml2 = cached_managers(s["id"])
-            if ml2:
-                with st.expander(f"Managers ({len(ml2)}) — {s['name']}"):
-                    for m in ml2:
-                        c1, c2 = st.columns([5,1])
-                        with c1:
-                            st.markdown(f"**{m['name']}** · {m.get('role','manager').title()} · +{m['phone']}")
-                        with c2:
-                            if st.button("✕", key=f"rm_{m['id']}", help=f"Remove {m['name']}"):
-                                db.get_db().table("store_managers").update({"is_active": False}).eq("id", m["id"]).execute()
-                                st.success(f"Removed {m['name']}")
-                                st.cache_data.clear()
-                                st.rerun()
-
-            # Add manager to existing store
-            with st.expander(f"Add manager to {s['name']}"):
-                with st.form(f"add_mgr_{s['id']}"):
-                    ac1,ac2,ac3 = st.columns(3)
-                    with ac1: am_n = st.text_input("Name *",  key=f"amn_{s['id']}")
-                    with ac2: am_p = st.text_input("Phone *", key=f"amp_{s['id']}", placeholder="+254... or +1... or +44...")
-                    with ac3: am_r = st.selectbox("Role", ["manager","owner","supervisor"], key=f"amr_{s['id']}")
-                    if st.form_submit_button("Add Manager", type="primary"):
-                        if am_n.strip() and am_p.strip():
-                            db.add_manager(s["id"], am_n.strip(), am_p.strip(), am_r)
-                            clean = am_p.replace("+","").replace(" ","").replace("-","")
-                            wa.send(clean, wa.msg_welcome(s["name"], am_n.strip()))
-                            st.success(f"{am_n} added as {am_r}. Welcome message sent.")
+            if st.form_submit_button("Create Store", type="primary", use_container_width=True):
+                if not s_name.strip():
+                    st.error("Store name is required.")
+                elif not mn.strip() or not mp.strip():
+                    st.error("Add a name and phone for the first manager.")
+                else:
+                    try:
+                        new_store = db.create_store(s_name.strip(), s_loc.strip(), s_type)
+                        if new_store:
+                            db.add_manager(new_store["id"], mn.strip(), mp.strip(), mr)
+                            clean_p = mp.replace("+","").replace(" ","").replace("-","")
+                            wa.send(clean_p, wa.msg_welcome(s_name.strip(), mn.strip()))
+                            st.success(f"✅ **{s_name}** is live. Welcome message sent to {mn}.")
+                            st.session_state["active_store"] = new_store["id"]
                             st.cache_data.clear()
                             st.rerun()
                         else:
-                            st.error("Name and phone required")
+                            st.error("Could not create store. Try again.")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
+    st.markdown("")
+
+    # ── Existing stores ───────────────────────────────────────
+    if not _all_s:
+        st.info("No stores yet — create your first one above.")
+    else:
+        for s in _all_s:
+            ml      = cached_managers(s["id"])
+            is_sel  = s["id"] == selected_id
+            has_inv = len(cached_inventory(s["id"])) > 0
+            mgr_chips = "".join([
+                f'<span class="sm-chip">' +
+                (m.get("name","?")[:16]) +
+                f' <span class="sm-role">{m.get("role","mgr")}</span></span>'
+                for m in ml
+            ]) or '<span style="color:#475569;font-size:0.75rem;">No managers yet</span>'
+
+            badge = ('<span class="sm-badge-live">● Inventory loaded</span>'
+                     if has_inv else
+                     '<span class="sm-badge-empty">No inventory</span>')
+            _card_cls = "sm-card active" if is_sel else "sm-card"
+            _tick     = "✓ " if is_sel else ""
+
+            st.markdown(
+                f'<div class="{_card_cls}">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'<div class="sm-name">{_tick}{s["name"]}</div>{badge}</div>'
+                f'<div class="sm-meta">{s.get("location","—")} · {s.get("store_type","—")}</div>'
+                f'<div>{mgr_chips}</div></div>',
+                unsafe_allow_html=True)
+
+            col_exp1, col_exp2 = st.columns(2)
+            with col_exp1:
+                with st.expander(f"👥 Managers ({len(ml)})"):
+                    for m in ml:
+                        rc1, rc2 = st.columns([5, 1])
+                        with rc1:
+                            st.markdown(
+                                f"**{m['name']}** &nbsp;·&nbsp; "
+                                f"{m.get('role','manager').title()} &nbsp;·&nbsp; "
+                                f"`+{m['phone']}`"
+                            )
+                        with rc2:
+                            if st.button("Remove", key=f"rm_{m['id']}", type="secondary"):
+                                db.get_db().table("store_managers") \
+                                    .update({"is_active": False}).eq("id", m["id"]).execute()
+                                st.cache_data.clear()
+                                st.rerun()
+            with col_exp2:
+                with st.expander("➕ Add manager"):
+                    with st.form(f"add_mgr_{s['id']}"):
+                        f1, f2, f3 = st.columns([2, 2, 1])
+                        with f1: am_n = st.text_input("Name *",   key=f"amn_{s['id']}", placeholder="Full name")
+                        with f2: am_p = st.text_input("Phone *",  key=f"amp_{s['id']}", placeholder="+254 7XX")
+                        with f3: am_r = st.selectbox("Role", ["manager","owner","supervisor"],
+                                                      key=f"amr_{s['id']}")
+                        if st.form_submit_button("Add", type="primary", use_container_width=True):
+                            if am_n.strip() and am_p.strip():
+                                db.add_manager(s["id"], am_n.strip(), am_p.strip(), am_r)
+                                clean_ap = am_p.replace("+","").replace(" ","").replace("-","")
+                                wa.send(clean_ap, wa.msg_welcome(s["name"], am_n.strip()))
+                                st.success(f"✅ {am_n} added.")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("Name and phone required.")
+            st.markdown("")
 
 # ══════════════════════════════════ UPLOAD ═════════════════════
 with t_upload:

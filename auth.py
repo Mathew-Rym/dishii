@@ -21,6 +21,7 @@ MANAGER_KEY     = "dishii_manager"
 IS_ADMIN_KEY    = "dishii_is_admin"
 OTP_PHONE_KEY   = "dishii_otp_phone"
 OTP_SENT_KEY    = "dishii_otp_sent"
+OTP_MSG_KEY     = "dishii_otp_msg"
 
 
 def _db():
@@ -33,22 +34,36 @@ def _db():
 def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
+
+def _normalize_phone(phone: str) -> str:
+    """Accept any common format → digits only with country code.
+    0720521291 → 254720521291
+    +254720521291 → 254720521291
+    254720521291 → 254720521291
+    """
+    p = phone.strip().replace(" ", "").replace("-", "").replace("+", "")
+    if p.startswith("0") and len(p) == 10:   # local Kenyan format
+        p = "254" + p[1:]
+    return p
+
 def send_otp(phone: str) -> Tuple[bool, str]:
     """
     Generate OTP, store in DB, send via WhatsApp.
     Returns (success, message).
     """
-    clean = phone.replace("+","").replace(" ","").replace("-","")
-    if not clean or len(clean) < 7:
-        return False, "Invalid phone number"
+    # Re-read .env every call so DISHII_DEV_MODE works without restart
+    load_dotenv(override=True)
 
-    # Check if this phone belongs to any manager or admin
-    db = _db()
-    mgr = db.table("store_managers").select("id,name,store_id").eq("phone", clean).eq("is_active", True).execute()
-    adm = db.table("admin_accounts").select("id,name").eq("phone", clean).eq("is_active", True).execute()
-
-    if not mgr.data and not adm.data:
-        return False, "Phone not registered. Contact your store admin."
+    # Normalize phone — accept any common format:
+    # 0720521291 → 254720521291
+    # +254720521291 → 254720521291
+    # 254720521291 → 254720521291
+    # 0720 521 291 → 254720521291
+    clean = phone.strip().replace("+","").replace(" ","").replace("-","")
+    if clean.startswith("0") and 9 <= len(clean) <= 10:
+        clean = "254" + clean[1:]
+    if not clean.isdigit() or len(clean) < 9:
+        return False, "Invalid phone number. Use format: 254720521291"
 
     # Invalidate old OTPs
     db.table("auth_otp").update({"used": True}).eq("phone", clean).eq("used", False).execute()
@@ -77,21 +92,24 @@ def send_otp(phone: str) -> Tuple[bool, str]:
             logger.info(f"OTP sent to {clean}")
             return True, "Code sent to your WhatsApp"
         else:
-            # Fallback: show in UI for development
-            logger.warning(f"WhatsApp send failed, OTP: {code}")
+            logger.warning(f"WhatsApp unavailable, OTP: {code}")
             if os.getenv("DISHII_DEV_MODE") == "1":
-                return True, f"WhatsApp unavailable — use code: {code}"
-            return False, "Could not send the code right now. Please try again."
+                return True, f"__devcode__{code}"
+            return False, "Could not send the code. Check WhatsApp is connected in Evolution API."
     except Exception as e:
         logger.error(f"OTP send error: {e}")
-        return True, f"WhatsApp unavailable — use code: {code}"
+        if os.getenv("DISHII_DEV_MODE") == "1":
+            return True, f"__devcode__{code}"
+        return False, f"WhatsApp error: {e}"
 
 def verify_otp(phone: str, code: str) -> Tuple[bool, str]:
     """
     Verify OTP. Returns (success, message).
     On success, session is set in st.session_state.
     """
-    clean = phone.replace("+","").replace(" ","").replace("-","")
+    clean = phone.strip().replace("+","").replace(" ","").replace("-","")
+    if clean.startswith("0") and 9 <= len(clean) <= 10:
+        clean = "254" + clean[1:]
     code  = code.strip()
     db    = _db()
 
@@ -104,8 +122,9 @@ def verify_otp(phone: str, code: str) -> Tuple[bool, str]:
     otp = r.data[0]
 
     # Check expiry
-    expires = datetime.fromisoformat(otp["expires_at"].replace("Z",""))
-    if datetime.utcnow() > expires:
+    expires = datetime.fromisoformat(otp["expires_at"].replace("Z","+00:00"))
+    from datetime import timezone
+    if datetime.now(timezone.utc) > expires:
         return False, "Code expired. Request a new one."
 
     # Mark OTP used
@@ -123,7 +142,9 @@ def verify_otp(phone: str, code: str) -> Tuple[bool, str]:
     # Get manager's stores
     mgrs = db.table("store_managers").select("*").eq("phone", clean).eq("is_active", True).execute()
     if not mgrs.data:
-        return False, "Manager not found."
+        # First-time user — flag for onboarding
+        st.session_state["_new_user_phone"] = clean
+        return True, "new_user"
 
     st.session_state[SESSION_KEY]  = True
     st.session_state[IS_ADMIN_KEY] = False
@@ -270,6 +291,7 @@ def render_login_page():
                     if ok:
                         st.session_state[OTP_PHONE_KEY] = phone.strip()
                         st.session_state[OTP_SENT_KEY]  = True
+                        st.session_state[OTP_MSG_KEY]   = msg
                         st.rerun()
                     else:
                         st.error(msg)
@@ -283,7 +305,14 @@ def render_login_page():
 
             masked = otp_phone[:4] + "••••" + otp_phone[-3:] if len(otp_phone) > 7 else otp_phone
             st.markdown(f"**Enter the code sent to {masked}**")
-            st.caption("Check your WhatsApp — valid for 5 minutes")
+            otp_msg = st.session_state.get(OTP_MSG_KEY, "")
+            if otp_msg and otp_msg.startswith("__devcode__"):
+                dev_code = otp_msg.replace("__devcode__","").strip()
+                st.warning(f"⚠️ WhatsApp not connected. Your code: **{dev_code}**")
+            elif otp_msg:
+                st.success(otp_msg)
+            else:
+                st.caption("Check your WhatsApp — valid for 5 minutes")
 
             code = st.text_input(
                 "Code",
@@ -315,6 +344,82 @@ def render_login_page():
 
             st.markdown('</div>', unsafe_allow_html=True)
 
+
+
+def render_onboarding():
+    """
+    First-time setup screen shown when a phone number isn't
+    registered yet. Creates the store + manager record and logs
+    the user in automatically.
+    """
+    import db as _db_mod, re as _re
+    phone = st.session_state.get("_new_user_phone", "")
+
+    st.markdown("""
+    <style>
+    .main .block-container{max-width:520px;margin:0 auto;padding-top:5rem;}
+    [data-testid="stSidebar"]{display:none;}
+    </style>""", unsafe_allow_html=True)
+
+    st.markdown("## Welcome to Dishii 👋")
+    st.caption("Set up your business in 30 seconds — no credit card needed.")
+    st.markdown("")
+
+    with st.form("onboarding_form"):
+        st.markdown("**Your name**")
+        owner_name = st.text_input("Name", placeholder="e.g. Jane Mwangi",
+                                   label_visibility="collapsed")
+
+        st.markdown("**Business name**")
+        biz_name = st.text_input("Business", placeholder="e.g. Quikmart Westlands",
+                                 label_visibility="collapsed")
+
+        col_l, col_t = st.columns(2)
+        with col_l:
+            st.markdown("**Location**")
+            location = st.text_input("Location", placeholder="Westlands, Nairobi",
+                                     label_visibility="collapsed")
+        with col_t:
+            st.markdown("**Business type**")
+            biz_type = st.selectbox("Type",
+                ["supermarket", "mini_mart", "restaurant",
+                 "distributor", "pharmacy", "wholesale"],
+                label_visibility="collapsed")
+
+        submitted = st.form_submit_button("Get Started →", type="primary",
+                                          use_container_width=True)
+
+    if submitted:
+        if not owner_name.strip() or not biz_name.strip():
+            st.error("Please enter your name and business name.")
+            return
+
+        try:
+            store = _db_mod.create_store(biz_name.strip(), location.strip(), biz_type)
+            if not store:
+                st.error("Could not create store — please try again.")
+                return
+            _db_mod.add_manager(store["id"], owner_name.strip(), phone, "owner")
+
+            # Log the user in directly
+            st.session_state[SESSION_KEY]  = True
+            st.session_state[IS_ADMIN_KEY] = False
+            st.session_state[MANAGER_KEY]  = {
+                "name": owner_name.strip(), "role": "owner", "phone": phone
+            }
+            st.session_state["_mgr_stores"] = [{"store_id": store["id"], "role": "owner"}]
+            st.session_state[STORE_KEY] = store
+            st.session_state.pop("_new_user_phone", None)
+            st.success(f"✅ {biz_name} is live! Welcome to Dishii.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Setup failed: {e}")
+
+    st.markdown("")
+    if st.button("← Use a different number"):
+        st.session_state.pop("_new_user_phone", None)
+        logout()
+        st.rerun()
 
 def render_store_picker():
     """
