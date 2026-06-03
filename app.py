@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 import db
 import whatsapp as wa
 from ai import process_upload, df_to_db_rows, generate_briefing
+try:
+    import sheets_connector as _sc
+    _SHEETS_ENABLED = True
+except ImportError:
+    _sc = None
+    _SHEETS_ENABLED = False
+
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -665,6 +672,102 @@ with t_upload:
                                format_func=lambda x: next(s["name"] for s in all_stores_up if s["id"]==x),
                                key="upload_target")
         t_store = db.get_store_by_id(t_id)
+
+        # ════════════════════════════════════════════════════
+        # GOOGLE SHEETS AUTO-SYNC
+        # ════════════════════════════════════════════════════
+        _sheet_url_saved = _sc.get_store_sheet(t_id) if _SHEETS_ENABLED else None
+        _sheet_connected = bool(_sheet_url_saved)
+        _expander_label  = (
+            "🟢 Google Sheet connected — auto-syncs every 30 min"
+            if _sheet_connected else
+            "🔗 Connect Google Sheet (auto-sync, no manual uploads needed)"
+        )
+        with st.expander(_expander_label, expanded=not _sheet_connected):
+            if not _SHEETS_ENABLED:
+                st.warning("sheets_connector.py not found — copy it into the project folder.")
+            elif _sheet_connected:
+                st.success(f"`{(_sheet_url_saved or '')[:80]}`")
+                _col_sync, _col_disc = st.columns([3, 1])
+                with _col_sync:
+                    if st.button("🔄 Sync now", key=f"sync_now_{t_id}"):
+                        with st.spinner("Pulling latest data from sheet…"):
+                            _df_sheet = _sc.pull_sheet(_sheet_url_saved)
+                        if _df_sheet is None or _df_sheet.empty:
+                            st.error("Could not read the sheet — check permissions.")
+                        else:
+                            _sh = _sc.sheet_hash(_df_sheet)
+                            if db.is_already_processed(_sh, t_id):
+                                st.info("Sheet hasn't changed since last sync — nothing to do.")
+                            else:
+                                _uid = db.create_upload_record(
+                                    t_id, f"{t_store['name']}_sheets_manual.csv", _sh
+                                )
+                                if not _uid:
+                                    st.error("Could not create upload record.")
+                                else:
+                                    _df_p, _summ = process_upload(
+                                        _df_sheet, t_id, _uid, red_t, amber_t, stock_w
+                                    )
+                                    db.update_upload_summary(_uid, _summ)
+                                    _rows = df_to_db_rows(_df_p)
+                                    if db.insert_inventory_items(_rows):
+                                        db.cleanup_old_uploads(t_id, keep=3)
+                                        _sc.mark_synced(t_id, "ok")
+                                        st.success(
+                                            f"✅ Synced {len(_rows)} SKUs from sheet"
+                                        )
+                                        _c1,_c2,_c3 = st.columns(3)
+                                        _c1.metric("SKUs",     _summ["total"])
+                                        _c2.metric("Critical", _summ["critical"])
+                                        _c3.metric("Health",   f"{_summ['health_score']}%")
+                                        st.rerun()
+                with _col_disc:
+                    if st.button("Disconnect", key=f"disc_{t_id}",
+                                  type="secondary"):
+                        _sc.disconnect_store_sheet(t_id)
+                        st.rerun()
+            else:
+                st.info(
+                    "Once connected, your agent syncs this sheet automatically "
+                    "every 30 min. You can still upload files manually below."
+                )
+                _sa_email = _sc.get_service_account_email() if _SHEETS_ENABLED else None
+                if _sa_email:
+                    st.caption(
+                        f"1️⃣  Share your Google Sheet with: `{_sa_email}`  "
+                        f"(view-only is fine)"
+                    )
+                    st.caption("2️⃣  Paste the sheet URL below and click Connect.")
+                else:
+                    st.caption(
+                        "Set the GOOGLE_CREDENTIALS env var (base64 service account JSON) "
+                        "to enable auto-sync."
+                    )
+                _new_url = st.text_input(
+                    "Google Sheet URL",
+                    placeholder="https://docs.google.com/spreadsheets/d/…/edit",
+                    key=f"sheet_url_input_{t_id}",
+                )
+                if st.button("Connect sheet", key=f"conn_{t_id}",
+                              type="primary") and _new_url.strip():
+                    with st.spinner("Testing connection…"):
+                        _test = _sc.pull_sheet(_new_url.strip())
+                    if _test is not None and not _test.empty:
+                        _sc.save_store_sheet(t_id, _new_url.strip())
+                        st.success(
+                            f"✅ Connected! Found {len(_test)} rows. "
+                            "Agent will auto-sync every 30 min."
+                        )
+                        st.rerun()
+                    else:
+                        st.error(
+                            "Could not read the sheet. Make sure you shared it "
+                            "with the service account email above, then try again."
+                        )
+
+        st.markdown("---")
+        st.markdown("##### 📤 Manual upload (always available as fallback)")
 
         with st.expander("Expected column format"):
             st.dataframe(pd.DataFrame({
