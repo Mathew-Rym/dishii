@@ -66,6 +66,7 @@ def send_otp(phone: str) -> Tuple[bool, str]:
         return False, "Invalid phone number. Use format: 254720521291"
 
     # Invalidate old OTPs
+    db = _db()
     db.table("auth_otp").update({"used": True}).eq("phone", clean).eq("used", False).execute()
 
     # Generate new OTP

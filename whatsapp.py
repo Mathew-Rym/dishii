@@ -88,15 +88,25 @@ def display_phone(phone: str) -> str:
 # ════════════════════════════════════════════════════════════════
 
 def get_connection_status() -> str:
-    if not EVOLUTION_URL or not EVOLUTION_KEY:
+    """Always reads fresh env so the status reflects reality, not a stale import."""
+    from dotenv import load_dotenv as _ld; _ld(override=True)
+    _url  = os.getenv("EVOLUTION_URL", "").rstrip("/")
+    _key  = os.getenv("EVOLUTION_KEY", "")
+    _inst = os.getenv("EVOLUTION_INSTANCE", "dishii")
+    if not _url or not _key:
         return "not_configured"
     try:
         r = requests.get(
-            f"{EVOLUTION_URL}/instance/connectionState/{EVOLUTION_INSTANCE}",
-            headers=_headers(), timeout=5
+            f"{_url}/instance/connectionState/{_inst}",
+            headers={"apikey": _key, "Content-Type": "application/json"},
+            timeout=5
         )
         if r.status_code == 200:
-            return r.json().get("instance", {}).get("state", "unknown")
+            data = r.json()
+            # Evolution API v2 returns {"instance":{"state":"open"}} or {"state":"open"}
+            state = (data.get("instance", {}).get("state")
+                     or data.get("state", "unknown"))
+            return state
     except Exception:
         pass
     return "disconnected"
@@ -151,15 +161,20 @@ def send(phone: str, text: str, msg_type: str = "default",
     if not clean:
         logger.warning(f"send(): invalid phone '{phone}'")
         return False
-    if not EVOLUTION_URL or not EVOLUTION_KEY:
+    # Read fresh every call — avoids stale module-level cache
+    from dotenv import load_dotenv as _ld; _ld(override=True)
+    _url  = os.getenv("EVOLUTION_URL","").rstrip("/")
+    _key  = os.getenv("EVOLUTION_KEY","")
+    _inst = os.getenv("EVOLUTION_INSTANCE","dishii")
+    if not _url or not _key:
         logger.warning("send(): Evolution API not configured")
         return False
     if not skip_dedup and _is_duplicate(clean, msg_type, text):
         return False
     try:
         r = requests.post(
-            f"{EVOLUTION_URL}/message/sendText/{EVOLUTION_INSTANCE}",
-            headers=_headers(),
+            f"{_url}/message/sendText/{_inst}",
+            headers={"apikey": _key, "Content-Type": "application/json"},
             json={"number": clean, "text": text},
             timeout=15
         )

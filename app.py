@@ -30,7 +30,7 @@ except ImportError:
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
     page_title="Dishii",
-    page_icon=(__import__("PIL.Image",fromlist=["Image"]).Image.open("assets/dishii-logo.png")
+    page_icon=(__import__("PIL.Image",fromlist=["Image"]).open("assets/dishii-logo.png")
            if __import__("os").path.exists("assets/dishii-logo.png") else "🍽️"),
     layout="wide",
     initial_sidebar_state="expanded"
@@ -104,6 +104,25 @@ footer{visibility:hidden;}#MainMenu{visibility:hidden;}
 .stProgress>div>div{background:#10b981;}
 div[data-testid="stMetricValue"]{font-size:1.4rem;font-weight:700;color:#f1f5f9;}
 .stButton button{border-radius:8px;font-weight:500;font-size:0.82rem;}
+/* ── Dishii brand colors ────────────────────────────── */
+button[data-testid="baseButton-primary"],
+.stButton > button[kind="primary"]{
+    background:#6366f1 !important;border-color:#6366f1 !important;color:#fff !important;}
+button[data-testid="baseButton-primary"]:hover,
+.stButton > button[kind="primary"]:hover{
+    background:#4f46e5 !important;border-color:#4f46e5 !important;}
+button[data-testid="baseButton-secondary"],
+.stButton > button[kind="secondary"]{
+    border-color:#1e293b !important;color:#94a3b8 !important;}
+/* Slider thumb + filled track */
+[data-testid="stSlider"] [role="slider"]{
+    background:#6366f1 !important;border-color:#6366f1 !important;}
+[data-testid="stSlider"] div[data-testid="stTickBarMin"],
+[data-testid="stSlider"] div[class*="Track"]:first-child{
+    background:#6366f1 !important;}
+[data-testid="stSlider"] span{color:#6366f1 !important;font-weight:600;}
+/* Active tab keeps green (matches brand) */
+.stTabs [aria-selected="true"]{background:#10b981 !important;color:white !important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,7 +135,7 @@ def load_logo():
 LOGO = load_logo()
 
 # ── Cached DB calls ───────────────────────────────────────────
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=8)
 def cached_wa_status():
     return wa.get_connection_status()
 
@@ -380,6 +399,15 @@ with st.sidebar:
 _assert_access(selected_id)
 active_store  = db.get_store_by_id(selected_id) if selected_id else None
 active_items  = cached_inventory(selected_id)   if selected_id else []
+# Auto-refresh once per store if items are empty but may exist in DB
+if selected_id and not active_items:
+    _rkey = f"_inv_refresh_{selected_id}"
+    if not st.session_state.get(_rkey):
+        st.session_state[_rkey] = True
+        st.cache_data.clear()
+        st.rerun()
+else:
+    st.session_state.pop(f"_inv_refresh_{selected_id}", None) if selected_id else None
 active_mgrs   = cached_managers(selected_id)    if selected_id else []
 
 active_summary = {
